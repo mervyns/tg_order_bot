@@ -2,7 +2,7 @@ from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import filters, MessageHandler
 
-from forwarder import OWNER_ID, bot
+from forwarder import OWNER_ID, get_bot
 
 
 async def get_id(update: Update, _):
@@ -41,4 +41,7 @@ GET_ID_HANDLER = MessageHandler(
     get_id,
 )
 
-bot.add_handler(GET_ID_HANDLER)
+def register_handlers():
+    """Register misc handlers with the bot"""
+    bot = get_bot()
+    bot.add_handler(GET_ID_HANDLER)

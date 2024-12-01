@@ -124,3 +124,19 @@ docker compose logs -f
 ### Credits
 
 - [AutoForwarder-TelegramBot](https://github.com/saksham2410/AutoForwarder-TelegramBot)
+
+Building in Docker using buildx
+# Build for linux/amd64 (most common VM architecture)
+docker buildx build --platform linux/amd64 \
+  -t gcr.io/mingvpn/hd-tg-bot:latest \
+  --push .
+
+ON VM
+docker pull gcr.io/mingvpn/hd-tg-bot:latest
+
+docker run -d \
+  --name tg-bot \
+  --restart unless-stopped \
+  --env-file .env \
+  --log-driver=gcplogs \
+  gcr.io/mingvpn/hd-tg-bot:latest

@@ -2,7 +2,7 @@ from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler, filters
 from telegram.constants import ParseMode
 
-from forwarder import bot, OWNER_ID
+from forwarder import OWNER_ID, get_bot
 
 PM_START_TEXT = """
 Hey {}, I'm {}!
@@ -48,5 +48,8 @@ async def help(update: Update, _):
         await message.reply_text(PM_HELP_TEXT)
 
 
-bot.add_handler(CommandHandler("start", start, filters=filters.User(OWNER_ID)))
-bot.add_handler(CommandHandler("help", help, filters=filters.User(OWNER_ID)))
+def register_handlers():
+    """Register command handlers with the bot"""
+    bot = get_bot()
+    bot.add_handler(CommandHandler("start", start, filters=filters.User(OWNER_ID)))
+    bot.add_handler(CommandHandler("help", help, filters=filters.User(OWNER_ID)))

@@ -1,0 +1,79 @@
+{
+    "chats": {
+        "-1002231481679": {
+            "topics": {
+                "2": {
+                    "id": 2,
+                    "type": "order",
+                    "sheet_configs": {
+                        "internal": "1zTeJ2Fbi8zXcgKKdvWqNnr1E2pLvLiD6sBJksPUJMHk",
+                        "hd_vr": "1VeG0HOTF9C_M-wBxeOuFRy9vcuUNGVDzRQt0aTltQeI",
+                        "hd_pay": "1LzyJLKf0iL3r0OOKlNiSrMsbg297Dh1X25lrgWqbtjw"
+                    },
+                    "validation_rules": {
+                        "check_swift": true,
+                        "check_iban": true,
+                        "check_sanctions": false
+                    }
+                },
+                "3": {
+                    "id": 3,
+                    "type": "payment",
+                    "sheet_configs": {
+                        "payments": "another_spreadsheet_id"
+                    },
+                    "validation_rules": {
+                        "check_swift": false,
+                        "check_iban": false,
+                        "check_sanctions": false
+                    }
+                }
+            }
+        },
+        "-1002294603233": {
+            "topics": {
+                "171": {
+                    "id": 171,
+                    "type": "order",
+                    "sheet_configs": {
+                        "internal": "1zTeJ2Fbi8zXcgKKdvWqNnr1E2pLvLiD6sBJksPUJMHk",
+                        "hd_vr": "1VeG0HOTF9C_M-wBxeOuFRy9vcuUNGVDzRQt0aTltQeI",
+                        "hd_pay": "1LzyJLKf0iL3r0OOKlNiSrMsbg297Dh1X25lrgWqbtjw"
+                    },
+                    "validation_rules": {
+                        "check_swift": true,
+                        "check_iban": true,
+                        "check_sanctions": false
+                    }
+                }
+            }
+        }
+    },
+    "services": {
+        "database": {
+            "pool_size": 20,
+            "max_overflow": 10,
+            "pool_timeout": 30,
+            "health_check_interval": 300
+        },
+        "sanctions": {
+            "enabled": true,
+            "api_key": "pnwE3LdenF99kFDNiB6KN7a9OeJRvD9s3eJCsVBk",
+            "api_base_url": "https://api.dilisense.com/v1"
+        },
+        "swift_api_key": "sk_0b92681192307a1b0dee01e76a18325908e856a8e61e0ed905fe11ee87e2574e",
+        "swift_api_url": "https://swiftcodesapi.com/v1/swifts",
+        "sheets_service_account": "hd-tg-gc.json"
+    },
+    "forwarding_rules": [
+        {
+            "source": "-1002070917204#2",
+            "destination": ["-1002294603233#2"]
+        }
+    ],
+    "output_settings": {
+        "verification_chat_id": "-1002294603233",
+        "verification_topic_id": "2",
+        "enable_verification_messages": true
+    }
+}
