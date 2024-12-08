@@ -1,125 +1,198 @@
 import asyncio
 import importlib
 import sys
+import signal
 from forwarder import LOGGER, get_bot
 from forwarder.modules import ALL_MODULES
 from forwarder.modules.initialize import initialize, get_db_manager
 from telegram import Update
+from typing import Optional
 
-async def cleanup():
-    """Cleanup resources"""
-    try:
-        # Cleanup database
-        db_manager = await get_db_manager()
-        if db_manager:
-            await db_manager.close()
-            LOGGER.info("Database connection closed")
-    except Exception as e:
-        LOGGER.error(f"Error during cleanup: {e}")
+class BotManager:
+    def __init__(self):
+        self.bot = None
+        self.health_check_task: Optional[asyncio.Task] = None
+        self.shutdown_event = asyncio.Event()
+        
+    async def cleanup(self):
+        """Cleanup resources"""
+        try:
+            # Cancel health check task if running
+            if self.health_check_task and not self.health_check_task.done():
+                self.health_check_task.cancel()
+                try:
+                    await self.health_check_task
+                except asyncio.CancelledError:
+                    pass
 
-async def initialize_app():
-    """Initialize all required components"""
-    try:
-        # Initialize database first
-        LOGGER.info("Initializing database...")
-        db_manager = await initialize()
-        if not db_manager:
-            LOGGER.error("Failed to initialize database")
+            # Stop the bot if running
+            if self.bot and self.bot.running:
+                if self.bot.updater.running:
+                    await self.bot.updater.stop()
+                await self.bot.stop()
+
+            # Cleanup database
+            db_manager = await get_db_manager()
+            if db_manager:
+                await db_manager.close()
+                LOGGER.info("Database connection closed")
+
+        except Exception as e:
+            LOGGER.error(f"Error during cleanup: {e}")
+
+    async def initialize_app(self):
+        """Initialize all required components"""
+        try:
+            # Initialize database first
+            LOGGER.info("Initializing database...")
+            db_manager = await initialize()
+            if not db_manager:
+                LOGGER.error("Failed to initialize database")
+                return False
+
+            # Initialize bot only once
+            if not self.bot:
+                LOGGER.info("Initializing bot...")
+                self.bot = get_bot()
+                await self.bot.initialize()
+
+            # Load all modules
+            LOGGER.info("Loading modules...")
+            for module in ALL_MODULES:
+                importlib.import_module("forwarder.modules." + module)
+            
+            LOGGER.info("Successfully loaded modules: " + str(ALL_MODULES))
+            
+            # Register handlers
+            LOGGER.info("Registering handlers...")
+            from forwarder.modules.message_handler import register_handlers as register_message_handlers
+            from forwarder.modules.document_handler import register_handlers as register_document_handlers
+            from forwarder.modules.default import register_handlers as register_default_handlers
+            from forwarder.modules.misc import register_handlers as register_misc_handlers
+            
+            register_message_handlers()
+            register_document_handlers()
+            register_default_handlers()
+            register_misc_handlers()
+            
+            return True
+            
+        except Exception as e:
+            LOGGER.error(f"Initialization failed: {e}")
             return False
 
-        # Get the bot instance first
-        LOGGER.info("Initializing bot...")
-        bot = get_bot()
-        await bot.initialize()
-
-        # Load all modules
-        LOGGER.info("Loading modules...")
-        for module in ALL_MODULES:
-            importlib.import_module("forwarder.modules." + module)
+    async def health_check(self, start_time: float):
+        """Perform periodic health checks"""
+        last_check_time = asyncio.get_event_loop().time()
+        check_count = 0
         
-        LOGGER.info("Successfully loaded modules: " + str(ALL_MODULES))
-        
-        # Register handlers from all modules
-        LOGGER.info("Registering handlers...")
-        from forwarder.modules.message_handler import register_handlers as register_message_handlers
-        from forwarder.modules.default import register_handlers as register_default_handlers
-        from forwarder.modules.misc import register_handlers as register_misc_handlers
-        
-        register_message_handlers()
-        register_default_handlers()
-        register_misc_handlers()
-        
-        return True
-        
-    except Exception as e:
-        LOGGER.error(f"Initialization failed: {e}")
-        return False
-
-async def main():
-    """Main async function to run the bot"""
-    try:
-        # Run initialization
-        if not await initialize_app():
-            LOGGER.error("Initialization failed")
-            return
-            
-        LOGGER.info("Starting bot...")
-        
-        # Get the bot instance
-        bot = get_bot()
-        
-        # Run the bot until stopped
-        LOGGER.info("Bot is running...")
-        await bot.initialize()
-        await bot.start()
-        
-        # Start polling in the background
-        LOGGER.info("Starting polling...")
-        await bot.updater.start_polling(drop_pending_updates=True)
-        
-        # Keep the bot running
-        LOGGER.info("Bot is now polling for updates...")
-        try:
-            # Create a future that never completes
-            running = asyncio.Event()
-            await running.wait()
-        except asyncio.CancelledError:
-            LOGGER.info("Received shutdown signal")
-            
-    except Exception as e:
-        LOGGER.error(f"Bot stopped due to error: {e}")
-    finally:
-        # Cleanup
-        LOGGER.info("Cleaning up resources...")
-        bot = get_bot()
-        if bot.running:
-            LOGGER.info("Stopping bot gracefully...")
+        while not self.shutdown_event.is_set():
             try:
-                # Stop the updater first
-                if bot.updater.running:
-                    await bot.updater.stop()
-                # Then stop and shutdown the bot
-                await bot.stop()
-                await bot.shutdown()
-            except Exception as stop_error:
-                LOGGER.error(f"Error stopping bot: {stop_error}")
-        await cleanup()
+                current_time = asyncio.get_event_loop().time()
+                uptime = current_time - start_time
+                time_since_last_check = current_time - last_check_time
+                
+                # Test bot connection
+                try:
+                    me = await asyncio.wait_for(self.bot.bot.get_me(), timeout=10)
+                    connection_status = "Connected"
+                except Exception as e:
+                    connection_status = f"Disconnected: {str(e)}"
+                    LOGGER.error(f"Connection test failed: {e}")
+                
+                LOGGER.info(
+                    f"Health check #{check_count} - "
+                    f"Uptime: {uptime:.2f}s, "
+                    f"Time since last check: {time_since_last_check:.2f}s, "
+                    f"Status: {connection_status}"
+                )
+                
+                last_check_time = current_time
+                check_count += 1
+                
+                if not self.bot.updater.running or connection_status != "Connected":
+                    LOGGER.warning("Potential issues detected - initiating shutdown")
+                    self.shutdown_event.set()
+                    break
+                
+                await asyncio.sleep(60)
+                
+            except asyncio.CancelledError:
+                LOGGER.info("Health check cancelled")
+                break
+            except Exception as e:
+                LOGGER.error(f"Health check failed: {e}", exc_info=True)
+                await asyncio.sleep(60)
+
+    async def run(self):
+        """Main run method"""
+        start_time = asyncio.get_event_loop().time()
+        
+        try:
+            LOGGER.info("=== Starting bot application ===")
+            
+            if not await self.initialize_app():
+                LOGGER.error("Initialization failed, exiting application")
+                return
+            
+            # Start polling
+            LOGGER.info("Starting polling...")
+            await self.bot.start()
+            await self.bot.updater.start_polling(drop_pending_updates=True)
+            
+            # Start health check in background
+            self.health_check_task = asyncio.create_task(
+                self.health_check(start_time)
+            )
+            
+            # Wait for shutdown signal
+            await self.shutdown_event.wait()
+            
+        except Exception as e:
+            LOGGER.error(f"Bot stopped due to error: {e}", exc_info=True)
+        finally:
+            await self.cleanup()
+
+def setup_signal_handlers(bot_manager: BotManager):
+    """Setup signal handlers for graceful shutdown"""
+    loop = asyncio.get_running_loop()
+    
+    def signal_handler():
+        LOGGER.info("Received shutdown signal")
+        bot_manager.shutdown_event.set()
+    
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, signal_handler)
 
 def run():
-    """Entry point function that runs the async main"""
+    """Run the bot."""
     try:
-        # Create new event loop and run main
+        LOGGER.info("Starting event loop...")
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        loop.run_until_complete(main())
+        
+        bot_manager = BotManager()
+        
+        async def start_bot():
+            # Set up signal handlers after loop is running
+            setup_signal_handlers(bot_manager)
+            await bot_manager.run()
+        
+        loop.run_until_complete(start_bot())
+        
     except KeyboardInterrupt:
-        LOGGER.info("Bot stopped by user")
+        LOGGER.info("Received keyboard interrupt")
     except Exception as e:
-        LOGGER.error(f"Fatal error: {e}")
+        LOGGER.error(f"Fatal error in main loop: {e}", exc_info=True)
     finally:
-        loop = asyncio.get_event_loop()
-        if not loop.is_closed():
-            loop.close()
-
+        LOGGER.info("Closing event loop...")
+        # Ensure all tasks are completed or cancelled
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        loop.close()
+        LOGGER.info("Event loop closed")
+    
 if __name__ == "__main__":
     run()

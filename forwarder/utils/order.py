@@ -200,6 +200,12 @@ class OrderProcessor:
             iban = details.get('iban')
             account_number = details.get('account_number')
             
+            # Check if account_number is actually an IBAN
+            if account_number and IBANValidator.looks_like_iban(account_number):
+                LOGGER.info("IBAN detected in account number field")
+                iban = account_number
+                account_number = None
+            
             # Perform SWIFT verification
             swift_valid, swift_message, swift_country = await self.swift_verifier.verify_swift_and_iban(
                 session, details['swift_code'], details['bank_name'], iban or account_number
@@ -220,7 +226,7 @@ class OrderProcessor:
             LOGGER.info(f"effective country, {effective_country}")
             LOGGER.info(f"validation_rules, {self.validation_rules}")
 
-            # Check if IBAN validation is needed (either provided or required by country)
+            # Check if IBAN validation is needed
             needs_iban_validation = (
                 iban is not None or 
                 (self.validation_rules.get('check_iban') and 
@@ -246,7 +252,6 @@ class OrderProcessor:
                     return False
 
             return True
-
     async def _process_sheets(self, details: Dict[str, str]) -> bool:
         """Process spreadsheet operations"""
         try:
@@ -302,7 +307,7 @@ class OrderProcessor:
         manager: GoogleSheetsManager,
         details: Dict[str, str]
     ):
-        """Update HD Pay sheet based on payout company"""
+        """Update HD Pay sheet based on payout company with duplicate checking"""
         payout_company = details.get('payout_company', '').upper()
         order_ref = details.get('order_ref', '')
         amount = details.get('amount', '')
@@ -315,46 +320,70 @@ class OrderProcessor:
         try:
             service = manager.authenticate()
             
+            # Determine sheet name based on payout company
             if "CELES" in payout_company:
                 sheet_name = 'Thai Tony Orders'
-                sheet_range = f"'{sheet_name}'!C:C"  # Get all values in column C
             elif "EUR" in payout_company or "SENIBO" in payout_company:
                 sheet_name = 'Water Orders'
-                sheet_range = f"'{sheet_name}'!C:C"  # Get all values in column C
             else:
                 # No matching sheet for this payout company
                 return
 
-            # Get all values in column C to find the last row
+            # Get all values from the sheet
+            sheet_range = f"'{sheet_name}'!A:G"  # Expanded range to include all potentially needed columns
             result = service.spreadsheets().values().get(
                 spreadsheetId=manager.SPREADSHEET_ID,
                 range=sheet_range
             ).execute()
             
             values = result.get('values', [])
-            next_row = len(values) + 1  # Add 1 to get the next empty row
+            
+            # Find existing row with matching order reference and last filled row
+            existing_row_index = None
+            last_filled_row = 0
+            
+            for i, row in enumerate(values):
+                # Update last filled row if this row has data in relevant columns
+                if len(row) >= 3 and any(cell.strip() for cell in row[:3]):  # Check first 3 columns for data
+                    last_filled_row = i + 1
+                
+                # Check for matching order reference
+                if len(row) > 2 and row[2] == order_ref:  # Column C (index 2) contains order reference
+                    existing_row_index = i + 1  # +1 because sheets are 1-based
             
             # Prepare row data based on sheet type
             if "CELES" in payout_company:
-                update_range = f"'{sheet_name}'!C{next_row}:F{next_row}"
-                row = [[
-                    order_ref,  # Column C
-                    "Order Sent", # Column D
-                    amount,    # Column E
-                    currency   # Column F
+                row_data = [[
+                    order_ref,     # Column C
+                    "Order Sent",  # Column D
+                    amount,        # Column E
+                    currency      # Column F
                 ]]
+                col_start = 'C'
+                col_end = 'F'
             else:  # EUR or SENIBO
-                update_range = f"'{sheet_name}'!C{next_row}:G{next_row}"
-                row = [[
+                row_data = [[
                     order_ref,     # Column C
                     "Order Sent",  # Column D
                     amount,        # Column E
                     currency,      # Column F
                     payout_company # Column G
                 ]]
-            
-            # Update the specific row with values
-            body = {'values': row}
+                col_start = 'C'
+                col_end = 'G'
+
+            if existing_row_index:
+                # Update existing row
+                update_range = f"'{sheet_name}'!{col_start}{existing_row_index}:{col_end}{existing_row_index}"
+                LOGGER.info(f"Updating existing row at {existing_row_index}")
+            else:
+                # Add new row at the next row after the last filled row
+                next_row = last_filled_row + 1
+                update_range = f"'{sheet_name}'!{col_start}{next_row}:{col_end}{next_row}"
+                LOGGER.info(f"Adding new row at {next_row} (after last filled row {last_filled_row})")
+
+            # Update the sheet
+            body = {'values': row_data}
             result = service.spreadsheets().values().update(
                 spreadsheetId=manager.SPREADSHEET_ID,
                 range=update_range,
@@ -362,11 +391,13 @@ class OrderProcessor:
                 body=body
             ).execute()
             
-            LOGGER.info(f"Updated HD Pay sheet {sheet_name} at row {next_row}")
+            action_type = "Updated" if existing_row_index else "Added new"
+            row_num = existing_row_index if existing_row_index else next_row
+            LOGGER.info(f"{action_type} order in HD Pay sheet {sheet_name} at row {row_num}")
             
         except Exception as e:
             LOGGER.error(f"Failed to update HD Pay sheet: {e}")
-
+            raise
     async def _send_validation_message(self, context: ContextTypes.DEFAULT_TYPE):
         """Send validation message"""
         message = self._format_validation_message()

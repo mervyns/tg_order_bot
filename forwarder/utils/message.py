@@ -14,11 +14,22 @@ def predicate_text(filters: List[str], text: str) -> bool:
 
     return False
 
+def is_order_message(message_text: str) -> bool:
+    """
+    Check if the message is an order message by looking for Order Reference.
+    """
+    order_ref_pattern = r'\[?(?:Order\s*Ref(?:erence)?(?:\s*No\.)?|Order\s*No\.):?]?'
+    return bool(re.search(order_ref_pattern, message_text, re.IGNORECASE | re.MULTILINE))
+
 def is_valid_order_format(message_text: str) -> Tuple[bool, Optional[str]]:
     """
     Validates if the message follows the required order format.
     Returns a tuple of (is_valid, error_message).
     """
+    # First check if this is an order message
+    if not is_order_message(message_text):
+        return False, None
+
     # Required fields that must be present in the message
     required_fields = [
         (r'\[?(?:Order\s*Ref(?:erence)?(?:\s*No\.)?|Order\s*No\.):?]?', "Order Reference"),

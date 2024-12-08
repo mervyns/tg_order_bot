@@ -13,7 +13,7 @@
                     "validation_rules": {
                         "check_swift": true,
                         "check_iban": true,
-                        "check_sanctions": false
+                        "check_sanctions": true
                     }
                 },
                 "3": {
@@ -43,7 +43,7 @@
                     "validation_rules": {
                         "check_swift": true,
                         "check_iban": true,
-                        "check_sanctions": false
+                        "check_sanctions": true
                     }
                 }
             }

@@ -3,7 +3,7 @@ import aiohttp
 import re
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
-from urllib.parse import quote
+from urllib.parse import quote_plus
 from forwarder import LOGGER
 
 @dataclass
@@ -18,56 +18,106 @@ class SanctionsService:
         self.api_key = api_key
         self.api_base_url = api_base_url
 
-    def generate_name_variations(self, company_name: str) -> List[str]:
-        variations = []
+    def extract_core_name(self, company_name: str) -> str:
+        """
+        Extract the core entity name by removing common business terms and suffixes.
+        """
+        LOGGER.info(f"Extracting core name from: {company_name}")
         
+        # Common terms to remove (business suffixes and descriptors)
+        removable_terms = [
+            # Company suffixes
+            r'\bCO\.,?\s*LTD\b',
+            r'\bCO\.,?\s*LIMITED\b',
+            r'\bCORPORATION\b',
+            r'\bCORP\b',
+            r'\bINC\b',
+            r'\bLLC\b',
+            r'\bLTD\b',
+            r'\bLIMITED\b',
+            r'\bPTE\b',
+            r'\bPVT\b',
+            r'\bGMBH\b',
+            # Business descriptors
+            r'\bIMPORT\b',
+            r'\bEXPORT\b',
+            r'\bCOMPANY\b',
+            r'\bFOREIGN\b',
+            r'\bTECHNOLOGY\b',
+            r'\bTRADE\b',
+            r'\bTRADING\b',
+            r'\bGROUP\b',
+            r'\bHOLDINGS?\b',
+            r'\bINDUSTRIES?\b',
+            r'\bINTERNATIONAL\b',
+            r'\bENTERPRISES?\b',
+            r'\bSIRKETI?\b', #Turkish for Company
+            # Common industry terms
+            r'\bMANUFACTURING\b',
+            r'\bPRODUCTS?\b',
+            r'\bSOLUTIONS?\b',
+            r'\bSERVICES?\b',
+            r'\bSYSTEMS?\b'
+            r'\bTICARET?\b', #Turkish for Trade
+        ]
+        
+        # Initial cleaning
         cleaned = company_name.replace("&", "and")
-        cleaned = re.sub(r'[(),.]', '', cleaned)
-        cleaned = re.sub(r'\s+', ' ', cleaned)
         
-        base_name = re.sub(r'\b(Co|Ltd|Limited|Import|Export|Company|Foreign|Trade|Trading|COLTD|and)\b', '', cleaned, flags=re.IGNORECASE)
-        base_name = re.sub(r'\s+', ' ', base_name).strip()
+        # Remove parenthetical content
+        cleaned = re.sub(r'\([^)]*\)', '', cleaned)
         
-        variations.append(cleaned)
-        variations.append(base_name)
+        # Remove all the terms
+        for term in removable_terms:
+            cleaned = re.sub(term, '', cleaned, flags=re.IGNORECASE)
         
-        if '(' in company_name:
-            core_name = company_name.split('(')[0].strip()
-            variations.append(core_name)
+        # Remove remaining punctuation except spaces
+        cleaned = re.sub(r'[^\w\s]', '', cleaned)
         
-        return list(set(variations))
+        # Clean up extra spaces and standardize
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        
+        LOGGER.info(f"Extracted core name: {cleaned}")
+        return cleaned
 
     async def check_entity(self, session: aiohttp.ClientSession, beneficiary_name: str, beneficiary_address: str = "") -> Dict:
         """
-        Check entity against sanctions lists with proper name and alias handling
+        Check entity against sanctions lists using core name
         """
         try:
-            name_data = self.generate_name_variations(beneficiary_name)
-            LOGGER.info(f"Checking name: {name_data['name']} with aliases: {name_data['alias_names']}")
+            core_name = self.extract_core_name(beneficiary_name)
+            LOGGER.info(f"Checking core name: {core_name}")
             
             # Construct query parameters
             query_params = {
-                "names": quote(name_data['name']),
-                "address": quote(beneficiary_address) if beneficiary_address else ""
+                "names": quote_plus(core_name),
+                "address": quote_plus(beneficiary_address) if beneficiary_address else ""
             }
             
             # Build query string
             query_string = "&".join(f"{k}={v}" for k, v in query_params.items() if v)
             
             headers = {"x-api-key": self.api_key}
+            url = f"{self.api_base_url}/checkEntity?{query_string}"
+
+            LOGGER.info(f"Full URL (without API key): {url}")
             
             async with session.get(
-                f"{self.api_base_url}/checkEntity?{query_string}",
+                url,
                 headers=headers
             ) as response:
                 if response.status == 200:
                     result = await response.json()
-                    
-                    # Add the name variations we used for reference
-                    result["name_variations"] = name_data
+                    result["core_name"] = core_name
+                    result["original_name"] = beneficiary_name
                     return result
                     
-            return {"total_hits": 0, "found_records": [], "name_variations": name_data}
+            return {
+                "total_hits": 0,
+                "found_records": [],
+                "core_name": core_name,
+                "original_name": beneficiary_name
+            }
             
         except Exception as e:
             LOGGER.error(f"Failed to check entity: {e}")
@@ -76,9 +126,8 @@ class SanctionsService:
     def format_sanction_message(self, beneficiary_name: str, sanction_result: Dict) -> str:
         sanction_hits = sanction_result.get("total_hits", 0)
         found_records = sanction_result.get("found_records", [])
-        matched_variation = sanction_result.get("matched_variation", "")
-        scanned_variations = sanction_result.get("name_variations", "")
-        LOGGER.info(f"something {sanction_hits} {found_records}")
+        core_name = sanction_result.get("core_name", "")
+        
         if sanction_hits > 0 and found_records:
             found_record = found_records[0]
             found_name = found_record.get("name", "Unknown")
@@ -88,11 +137,11 @@ class SanctionsService:
             
             address_str = ", ".join(address) if address else "No address available"
             sanctions_str = "\n• ".join(sanction_details) if sanction_details else "No details available"
-            variation_info = f"\nMatched Variation: `{matched_variation}`" if matched_variation else ""
             
             return (
                 "🚫 *SANCTIONS CHECK FAILED*\n\n"
-                f"Company: `{beneficiary_name}`{variation_info}\n"
+                f"Original Name: `{beneficiary_name}`\n"
+                f"Core Entity Name: `{core_name}`\n"
                 f"Matched Entity: `{found_name}`\n"
                 f"Source Type: `{source_type}`\n"
                 f"Address: `{address_str}`\n\n"
@@ -100,12 +149,12 @@ class SanctionsService:
                 "Status: ❌ SANCTIONED\n\n"
                 "⚠️ This transaction cannot proceed due to sanctions."
             )
-        else:
-            variations_list = "\n• ".join([f"`{var}`" for var in scanned_variations])
+        
         return (
             "✅ *SANCTIONS CHECK PASSED*\n\n"
-            f"*Name Variations Checked*:\n"
-            f"• {variations_list}\n"
+            f"Original Name: `{beneficiary_name}`\n"
+            f"Core Entity Name: `{core_name}`\n"
+            "Status: ✅ NO SANCTIONS FOUND"
         )
 
     async def validate_entity(self, details: Dict[str, str]) -> SanctionsValidationResult:

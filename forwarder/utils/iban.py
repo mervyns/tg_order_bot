@@ -40,6 +40,28 @@ class IBANValidator:
         return ''.join(iban.split()).upper()
 
     @staticmethod
+    def looks_like_iban(account_string: str) -> bool:
+        """
+        Check if an account string appears to be an IBAN.
+        Basic check: 2 letters followed by 2-34 alphanumeric characters.
+        """
+        if not account_string or len(account_string) < 4:
+            return False
+        
+        # Remove any whitespace from the string
+        account_string = ''.join(account_string.split())
+        
+        # Check if string matches basic IBAN pattern
+        # - Starts with 2 letters (country code)
+        # - Followed by 2-34 alphanumeric characters
+        if (len(account_string) <= 34 and 
+            account_string[:2].isalpha() and 
+            account_string[2:].isalnum()):
+            return True
+            
+        return False
+
+    @staticmethod
     def validate_iban(iban: str) -> Tuple[bool, str]:
         """
         Validate IBAN number
